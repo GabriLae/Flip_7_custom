@@ -43,11 +43,44 @@ Test più semplici e veloci: se il GameCore non dipende da UnityEngine, i test g
 Codice più pulito: Unity ti spinge verso MonoBehaviour, lifecycle (Update, Start), riferimenti a scene/Prefab, e side effects. Per le regole di un gioco di carte conviene avere funzioni pure e stato esplicito: è più facile da debuggare e mantenere.
 Separazione responsabilità: Unity gestisce UI/input/animazioni; il core gestisce solo “regole e stato”. Così puoi cambiare UI o engine senza riscrivere la logica.
 Determinismo: nel core puoi controllare RNG/deck con seed o lista di carte nei test; con Unity spesso finisci a usare API o timing che complicano la riproducibilità.
-Detto questo, posso comunque fare tutto “dentro Unity” e usare UnityEngine ovunque: funziona, solo che il TDD diventa più difficile.
-
 ### 4.2 UnityPresentation (non testabile / minimal)
 - Mostra stato e log
 - Raccoglie input e invoca comandi del core
+
+### 4.3 Scelta Implementativa: Ibrido Unity-first
+
+Scelta adottata per questo progetto (didattica + portfolio pubblico):
+
+Tutto il codice risiede dentro `Assets/Scripts/` di Unity, ma con **separazione logica** rigorosa:
+
+```
+Assets/Scripts/
+├── Core/                  ← C# puro (nessun using UnityEngine)
+│   ├── Card.cs            (class, non MonoBehaviour)
+│   ├── Deck.cs            (class)
+│   ├── GameEngine.cs      (class — API principale)
+│   ├── ScoringEngine.cs   (class)
+│   ├── MatchState.cs      (class)
+│   ├── RoundState.cs      (class)
+│   └── PlayerRoundState.cs(class)
+│
+├── Presentation/          ← MonoBehaviour, input, rendering
+│   ├── GameManager.cs     (MonoBehaviour → chiama GameEngine)
+│   └── ...                (canvas, event system, UI)
+│
+└── Tests/                 ← Test in Edit Mode (Unity Test Framework)
+    └── GameCoreTests.cs   (NUnit, nessun Play Mode)
+```
+
+> **Nota:** il file `Assets/GameManager.cs` attuale va **spostato** in `Assets/Scripts/Presentation/GameManager.cs`, non creato da zero.
+
+**Perché questa scelta:**
+- Il GameCore rimane puro C# (niente `MonoBehaviour`, niente `Update()`) → testabile, deterministico
+- Ma è tutto dentro Unity → il professore e chi guarda il portfolio vede un progetto Unity completo
+- Il layer Presentation impara Unity sul serio (MonoBehaviour, SerializeField, canvas, event system)
+- I test in Edit Mode girano senza Play Mode → quasi veloci come `dotnet test` ma dentro Unity
+
+Tutti i principi delle sezioni 4.1 e 4.2 rimangono identici. Cambia solo la posizione fisica dei file.
 
 ## 5. Modello dati (alto livello)
 ### 5.1 Tipi base
@@ -93,14 +126,20 @@ Detto questo, posso comunque fare tutto “dentro Unity” e usare UnityEngine o
   - forza l’uscita dal round (equivalente a `Stay` forzato), con punti calcolati a fine round
 
 ## 8. Strategia di test
-### 8.1 Determinismo
+### 8.1 Framework: Unity Test Framework (Edit Mode)
+- I test usano **Unity Test Framework** (NUnit) in **Edit Mode**
+- Non serve Play Mode: le classi Core sono pure C#, si testano senza scene né MonoBehaviour
+- Setup: Unity → Window → General → Test Runner → Create EditMode Test Assembly Folder in `Assets/Scripts/Tests/`
+- Unity chiederà automaticamente di creare un assembly definition (`.asmdef`) per l'assembly dei test. Accetta. Se non lo fa, crealo manualmente: tasto destro su `Assets/Scripts/Tests/` → Create → Assembly Definition.
+
+### 8.2 Determinismo
 - Nei test si usa un `Deck` deterministico:
   - `DeckFromList([...])` per scenari
   - opzionale: `DeckFromSeed(seed)` per test non-scenario
 
-### 8.2 Granularità
+### 8.3 Granularità
 - Test unitari su singole regole e transizioni di stato
-- Test di “flow” su round completo (mini-simulazioni)
+- Test di "flow" su round completo (mini-simulazioni)
 
 ## 9. Test Cases (ordine consigliato)
 ### 9.1 Deck & Cards
