@@ -11,7 +11,7 @@ using System.Linq;
 /// 
 ///  Gestisce 3 schermate:
 ///    - Menu: titolo, selezione giocatori (3-8), PLAY
-///    - Gioco: info round, stati giocatori, log, PESCA/FERMA
+///    - Gioco: info round, stati giocatori, log, PESCA/PASSA
 ///    - GameOver: vincitore, punteggi, torna al menu
 /// 
 ///  Crea tutta la UI a runtime (Canvas, pannelli, testi, bottoni).
@@ -55,7 +55,7 @@ public class Avvio : MonoBehaviour
     /// <summary>Ultimo stato pubblico ricevuto dal motore (per display).</summary>
     private StatoPubblico _stato;
 
-    /// <summary>Log degli eventi di gioco (pescate, fermate, round, ecc.).</summary>
+    /// <summary>Log degli eventi di gioco (pescate, passate, round, ecc.).</summary>
     private List<string> _logEventi = new List<string>();
 
     /// <summary>Numero di giocatori selezionato (default 4).</summary>
@@ -66,6 +66,7 @@ public class Avvio : MonoBehaviour
 
     // ── Riferimenti UI (creati a runtime) ──
     private GameObject _canvas;
+    private GameObject _safeAreaContainer;  // Contiene i pannelli rispettando la safe area
     private GameObject _pannelloMenu;
     private GameObject _pannelloGioco;
     private GameObject _pannelloGameOver;
@@ -73,7 +74,7 @@ public class Avvio : MonoBehaviour
     private Button[] _btnGiocatori;     // 6 bottoni: 3, 4, 5, 6, 7, 8 giocatori
     private Button _btnPlay;            // Pulsante PLAY sul menu
     private Button _btnPesca;           // Pulsante PESCA durante il gioco
-    private Button _btnFerma;           // Pulsante FERMA durante il gioco
+    private Button _btnPassa;           // Pulsante PASSA durante il gioco
     private Text _testoGiocatori;       // Stati e punteggi di tutti i giocatori
     private Text _testoLog;             // Log eventi (ultime 8 righe)
     private Text _testoInfo;            // Info sul round corrente
@@ -82,6 +83,13 @@ public class Avvio : MonoBehaviour
     private Color _coloreNormale = new Color(0.2f, 0.3f, 0.4f);        // Grigio-blu per bottoni non selezionati
     private Color _coloreSelezionato = new Color(0.2f, 0.6f, 0.2f);    // Verde per bottone selezionato
     private Font _font;                 // Font caricato (con fallback)
+    private bool _isPortrait;           // True se lo schermo è in verticale (mobile)
+
+    /// <summary>Bottoni per la selezione bersaglio (Congela/Pesca 3).</summary>
+    private List<Button> _bersaglioButtons;
+
+    /// <summary>Pannello per la selezione bersaglio.</summary>
+    private GameObject _pannelloBersaglio;
 
     // ═══════════════════════════════════════════════════════════════════════
     //  CICLO DI VITA UNITY
@@ -188,9 +196,13 @@ public class Avvio : MonoBehaviour
 
     /// <summary>
     /// Crea il Canvas principale (ScreenSpaceOverlay) con:
-    /// - CanvasScaler: adatta la UI a qualsiasi risoluzione (riferimento 1920×1080)
+    /// - CanvasScaler: adatta la UI a qualsiasi risoluzione
     /// - GraphicRaycaster: necessario per intercettare i click sui bottoni
     /// - Sfondo scuro (Image) colore #14141F
+    /// 
+    /// Per mobile portrait usa reference 1080×1920 così il canvas riempie
+    /// lo schermo in verticale (invece di essere compresso al centro).
+    /// Per desktop/ultrawide usa reference 1920×1080.
     /// 
     /// Se esiste già un Canvas, lo distrugge prima (pulisce eventuali residui).
     /// </summary>
@@ -205,9 +217,34 @@ public class Avvio : MonoBehaviour
         var c = _canvas.AddComponent<Canvas>();
         c.renderMode = RenderMode.ScreenSpaceOverlay;
 
+        float screenRatio = Screen.width / (float)Screen.height;
+        float refRatio = 1920f / 1080f; // 16:9
+
+        _isPortrait = screenRatio < refRatio - 0.05f;
+
+        // ── CanvasScaler con reference dinamica in base all'orientamento ──
         var scaler = _canvas.AddComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(1920, 1080);
+
+        if (_isPortrait)
+        {
+            // Mobile portrait: reference verticale 1080×1920, match=0 (larghezza)
+            // Il canvas occupa tutta la larghezza e ~80% dell'altezza
+            scaler.referenceResolution = new Vector2(1080, 1920);
+            scaler.matchWidthOrHeight = 0.0f;
+        }
+        else if (screenRatio > refRatio + 0.05f)
+        {
+            // Schermi ultrawide → scaling su altezza
+            scaler.referenceResolution = new Vector2(1920, 1080);
+            scaler.matchWidthOrHeight = 1.0f;
+        }
+        else
+        {
+            // 16:9 classico → bilanciato
+            scaler.referenceResolution = new Vector2(1920, 1080);
+            scaler.matchWidthOrHeight = 0.5f;
+        }
 
         _canvas.AddComponent<GraphicRaycaster>();
 
@@ -215,6 +252,18 @@ public class Avvio : MonoBehaviour
         var sfondo = _canvas.AddComponent<Image>();
         sfondo.color = new Color(0.08f, 0.08f, 0.12f);
         sfondo.raycastTarget = false;
+
+        // ── Contenitore Safe Area ──
+        // Su mobile evita che UI venga coperta da notch, status bar, home indicator.
+        // Su desktop non ha effetto (safe area = tutto schermo).
+        _safeAreaContainer = new GameObject("SafeArea");
+        _safeAreaContainer.transform.SetParent(_canvas.transform, false);
+        var srt = _safeAreaContainer.AddComponent<RectTransform>();
+        Rect sa = Screen.safeArea;
+        srt.anchorMin = new Vector2(sa.xMin / Screen.width, sa.yMin / Screen.height);
+        srt.anchorMax = new Vector2(sa.xMax / Screen.width, sa.yMax / Screen.height);
+        srt.offsetMin = Vector2.zero;
+        srt.offsetMax = Vector2.zero;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -240,33 +289,63 @@ public class Avvio : MonoBehaviour
         _pannelloMenu = CreaPannello("PanelMenu", true);
         var CT = _pannelloMenu.transform;
 
-        // ── Titolo e sottotitolo ──
-        CreaTesto("Titolo", CT, "FLIP 7", 56, 0, 100, 400, 100);
-        CreaTesto("Sottotitolo", CT, "Riproduzione digitale", 20, 0, 50, 400, 40);
-        CreaTesto("Label", CT, "Numero giocatori:", 22, 0, -10, 300, 30);
-
-        // ── Bottoni per selezionare il numero di giocatori (3-8) ──
-        _btnGiocatori = new Button[6];
-        int[] valori = { 3, 4, 5, 6, 7, 8 };
-
-        for (int i = 0; i < 6; i++)
+        // ── Layout adattivo: menu diverso per portrait (mobile) e landscape (desktop) ──
+        if (_isPortrait)
         {
-            float x = (i - 2.5f) * 65f;          // Disposizione orizzontale centrata
-            int idx = i;                           // Copia locale per la closure
+            // Portrait (1080×1920 reference) — menu distribuito verticalmente
+            CreaTesto("Titolo", CT, "FLIP 7", 56, 0, 800, 500, 100);
+            CreaTesto("Sottotitolo", CT, "Riproduzione digitale", 28, 0, 720, 500, 40);
+            CreaTesto("Label", CT, "Numero giocatori:", 28, 0, 620, 400, 36);
 
-            _btnGiocatori[i] = CreaBottone(
-                $"BtnG{valori[i]}", CT, $"{valori[i]}",
-                x, -80, 50, 50,
-                i == 1 ? _coloreSelezionato : _coloreNormale  // Default: 4 giocatori (indice 1)
-            );
+            _btnGiocatori = new Button[6];
+            int[] valori = { 3, 4, 5, 6, 7, 8 };
+            for (int i = 0; i < 6; i++)
+            {
+                float x = (i - 2.5f) * 80f;
+                int idx = i;
+                _btnGiocatori[i] = CreaBottone(
+                    $"BtnG{valori[i]}", CT, $"{valori[i]}",
+                    x, 540, 70, 60,
+                    i == 1 ? _coloreSelezionato : _coloreNormale
+                );
+                _btnGiocatori[i].onClick.AddListener(delegate { Seleziona(idx); });
+            }
 
-            _btnGiocatori[i].onClick.AddListener(delegate { Seleziona(idx); });
+            _btnPlay = CreaBottone("BtnPlay", CT, "AVVIA PARTITA", 0, 380, 300, 65,
+                new Color(0.15f, 0.5f, 0.15f));
+            _btnPlay.onClick.AddListener(AvviaPartita);
+
+            CreaBottone("BtnEsci", CT, "ESCI", 0, 240, 180, 50,
+                new Color(0.5f, 0.15f, 0.15f)).onClick.AddListener(OnEsci);
         }
+        else
+        {
+            // Landscape (1920×1080 reference) — menu standard
+            CreaTesto("Titolo", CT, "FLIP 7", 56, 0, 120, 500, 100);
+            CreaTesto("Sottotitolo", CT, "Riproduzione digitale", 28, 0, 60, 500, 40);
+            CreaTesto("Label", CT, "Numero giocatori:", 28, 0, -10, 400, 36);
 
-        // ── Pulsante PLAY ──
-        _btnPlay = CreaBottone("BtnPlay", CT, "PLAY", 0, -180, 260, 55,
-            new Color(0.15f, 0.5f, 0.15f));  // Verde scuro
-        _btnPlay.onClick.AddListener(AvviaPartita);
+            _btnGiocatori = new Button[6];
+            int[] valori = { 3, 4, 5, 6, 7, 8 };
+            for (int i = 0; i < 6; i++)
+            {
+                float x = (i - 2.5f) * 80f;
+                int idx = i;
+                _btnGiocatori[i] = CreaBottone(
+                    $"BtnG{valori[i]}", CT, $"{valori[i]}",
+                    x, -90, 70, 60,
+                    i == 1 ? _coloreSelezionato : _coloreNormale
+                );
+                _btnGiocatori[i].onClick.AddListener(delegate { Seleziona(idx); });
+            }
+
+            _btnPlay = CreaBottone("BtnPlay", CT, "AVVIA PARTITA", 0, -200, 300, 65,
+                new Color(0.15f, 0.5f, 0.15f));
+            _btnPlay.onClick.AddListener(AvviaPartita);
+
+            CreaBottone("BtnEsci", CT, "ESCI", 0, -280, 180, 50,
+                new Color(0.5f, 0.15f, 0.15f)).onClick.AddListener(OnEsci);
+        }
 
         _schermoCorrente = Schermo.Menu;
     }
@@ -301,6 +380,8 @@ public class Avvio : MonoBehaviour
     {
         // Pulisce log e inizializza il motore di gioco
         _logEventi.Clear();
+        _bersaglioButtons = new List<Button>();
+        _pannelloBersaglio = null;
         _gioco = new MotoreDiGioco();
         _gioco.AvviaPartita(_numeroGiocatori);
         _logEventi.Add($"Partita con {_numeroGiocatori} giocatori!");
@@ -311,20 +392,59 @@ public class Avvio : MonoBehaviour
 
         var PG = _pannelloGioco.transform;
 
-        // Testi informativi
-        _testoInfo = CreaTesto("TestoInfo", PG,
-            $"Round 1 | Giocatore 1 di turno", 20, 0, 400, 800, 50);
-        _testoGiocatori = CreaTesto("TestoGiocatori", PG, "", 17, -400, 30, 700, 450);
-        _testoLog = CreaTesto("TestoLog", PG, "", 14, 250, -200, 450, 280);
+        // ── Layout adattivo: posizioni diverse per portrait (mobile) e landscape (desktop) ──
+        if (_isPortrait)
+        {
+            // ═══ Portrait (1080×1920 reference) — mobile ═══
+            _testoInfo = CreaTesto("TestoInfo", PG,
+                $"Round 1 | Giocatore 1 di turno", 36, 0, 780, 800, 55);
+            _testoGiocatori = CreaTesto("TestoGiocatori", PG, "", 34, 0, 0, 700, 780);
+            var rtG = _testoGiocatori.GetComponent<RectTransform>();
+            rtG.anchorMin = new Vector2(0f, 0.5f);
+            rtG.anchorMax = new Vector2(0f, 0.5f);
+            rtG.pivot = new Vector2(0f, 0.5f);
+            rtG.anchoredPosition = new Vector2(30f, 330f);
+            _testoGiocatori.alignment = TextAnchor.MiddleLeft;
+            _testoLog = CreaTesto("TestoLog", PG, "", 24, 0, -290, 700, 220);
 
-        // Pulsanti azione
-        _btnPesca = CreaBottone("BtnPesca", PG, "PESCA", -120, -80, 140, 55,
-            new Color(0.15f, 0.35f, 0.7f));  // Blu
-        _btnFerma = CreaBottone("BtnFerma", PG, "FERMA", 30, -80, 140, 55,
-            new Color(0.6f, 0.35f, 0.1f));    // Arancione
+            _btnPesca = CreaBottone("BtnPesca", PG, "PESCA", -90, -460, 130, 60,
+                new Color(0.15f, 0.35f, 0.7f));  // Blu
+            _btnPassa = CreaBottone("BtnPassa", PG, "PASSA", 90, -460, 130, 60,
+                new Color(0.6f, 0.35f, 0.1f));    // Arancione
 
-        _btnPesca.onClick.AddListener(OnPesca);
-        _btnFerma.onClick.AddListener(OnFerma);
+            _btnPesca.onClick.AddListener(OnPesca);
+            _btnPassa.onClick.AddListener(OnPassa);
+
+            // ESCI ben distanziato sotto i bottoni
+            CreaBottone("BtnEsci", PG, "ESCI", 0, -580, 120, 45,
+                new Color(0.5f, 0.15f, 0.15f)).onClick.AddListener(OnEsci);
+        }
+        else
+        {
+            // ═══ Landscape/ultrawide (1920×1080 reference) — desktop ═══
+            _testoInfo = CreaTesto("TestoInfo", PG,
+                $"Round 1 | Giocatore 1 di turno", 36, 0, 400, 900, 55);
+            _testoGiocatori = CreaTesto("TestoGiocatori", PG, "", 34, 0, 0, 700, 580);
+            var rtG = _testoGiocatori.GetComponent<RectTransform>();
+            rtG.anchorMin = new Vector2(0f, 0.5f);
+            rtG.anchorMax = new Vector2(0f, 0.5f);
+            rtG.pivot = new Vector2(0f, 0.5f);
+            rtG.anchoredPosition = new Vector2(30f, 30f);
+            _testoGiocatori.alignment = TextAnchor.MiddleLeft;
+            _testoLog = CreaTesto("TestoLog", PG, "", 24, 250, -200, 500, 300);
+
+            _btnPesca = CreaBottone("BtnPesca", PG, "PESCA", -100, -390, 150, 65,
+                new Color(0.15f, 0.35f, 0.7f));  // Blu
+            _btnPassa = CreaBottone("BtnPassa", PG, "PASSA", 100, -390, 150, 65,
+                new Color(0.6f, 0.35f, 0.1f));    // Arancione
+
+            _btnPesca.onClick.AddListener(OnPesca);
+            _btnPassa.onClick.AddListener(OnPassa);
+
+            // ESCI ben distanziato sotto i bottoni
+            CreaBottone("BtnEsci", PG, "ESCI", 0, -490, 140, 45,
+                new Color(0.5f, 0.15f, 0.15f)).onClick.AddListener(OnEsci);
+        }
 
         _schermoCorrente = Schermo.Gioco;
         AggiornaPulsanti();
@@ -333,6 +453,7 @@ public class Avvio : MonoBehaviour
     /// <summary>
     /// Callback del pulsante PESCA.
     /// Il giocatore corrente pesca una carta dal mazzo.
+    /// Se la carta richiede selezione bersaglio, viene mostrata l'UI di targeting.
     /// </summary>
     private void OnPesca()
     {
@@ -340,21 +461,32 @@ public class Avvio : MonoBehaviour
 
         int g = _gioco.Round.GiocatoreCorrente + 1;
         _gioco.Pesca();
-        _logEventi.Add($"Giocatore {g} pesca.");
+
+        if (_gioco.AzioneInAttesa != TipoAzioneInAttesa.Nessuna)
+        {
+            string nomeAzione = _gioco.AzioneInAttesa == TipoAzioneInAttesa.ScegliBersaglioCongela
+                ? "CONGELA" : "PESCA 3";
+            _logEventi.Add($"Giocatore {g} pesca [{nomeAzione}] — scegli il bersaglio!");
+        }
+        else
+        {
+            _logEventi.Add($"Giocatore {g} pesca.");
+        }
+
         AggiornaPulsanti();
     }
 
     /// <summary>
-    /// Callback del pulsante FERMA.
+    /// Callback del pulsante PASSA.
     /// Il giocatore corrente termina il suo turno volontariamente.
     /// </summary>
-    private void OnFerma()
+    private void OnPassa()
     {
         if (_gioco == null || !_gioco.PuòFermarsi()) return;
 
         int g = _gioco.Round.GiocatoreCorrente + 1;
         _gioco.Ferma();
-        _logEventi.Add($"Giocatore {g} si ferma.");
+        _logEventi.Add($"Giocatore {g} passa.");
         AggiornaPulsanti();
     }
 
@@ -370,6 +502,21 @@ public class Avvio : MonoBehaviour
         _stato = _gioco.OttieniStatoPubblico();
         int corrente = _stato.GiocatoreCorrente + 1;
         int mazziere = _gioco.Partita.IndiceMazziere + 1;
+
+        // ── Controlla se c'è un'azione in attesa di selezione bersaglio ──
+        if (_gioco.AzioneInAttesa != TipoAzioneInAttesa.Nessuna)
+        {
+            string azioneNome = _gioco.AzioneInAttesa == TipoAzioneInAttesa.ScegliBersaglioCongela
+                ? "CONGELA" : "PESCA 3";
+            _testoInfo.text = $"<b>Scegli il bersaglio per {azioneNome}!</b>";
+            MostraBersagli();
+            return;
+        }
+        else if (_pannelloBersaglio != null)
+        {
+            // Pulisce la UI di targeting se non più necessaria
+            PulisciBersagli();
+        }
 
         // Riga informativa in alto
         _testoInfo.text = $"Round {_stato.RoundCorrente + 1} | " +
@@ -391,6 +538,8 @@ public class Avvio : MonoBehaviour
             };
 
             string pre = (i == _stato.GiocatoreCorrente) ? ">> " : "   ";
+
+            // Mostra il riepilogo giocatore
             string l = $"{pre}G{i + 1}: <color={col}>{_stato.StatiGiocatori[i]}</color> " +
                        $"Carte:{_stato.ConteggioNumeri[i]} " +
                        $"Punti:{_stato.PunteggiPotenziali[i]} " +
@@ -399,7 +548,15 @@ public class Avvio : MonoBehaviour
             if (i == _stato.GiocatoreCorrente)
                 l = $"<b>{l}</b>";   // Grassetto per il giocatore corrente
 
-            _testoGiocatori.text += l + "\n\n";
+            _testoGiocatori.text += l + "\n";
+
+            // Mostra le carte pescate (se il giocatore ha almeno una carta)
+            if (!string.IsNullOrEmpty(_stato.CarteDescrizioni[i]))
+            {
+                _testoGiocatori.text += $"      <size=26>{_stato.CarteDescrizioni[i]}</size>\n";
+            }
+
+            // Senza blank line extra per risparmiare spazio verticale
         }
 
         // Log eventi (colonna destra, ultime 8 righe)
@@ -408,16 +565,116 @@ public class Avvio : MonoBehaviour
     }
 
     /// <summary>
-    /// Abilita/disabilita i pulsanti PESCA e FERMA in base allo stato
+    /// Abilita/disabilita i pulsanti PESCA e PASSA in base allo stato
     /// del giocatore corrente (es. disabilita "Pesca" se sballato).
+    /// Disabilita entrambi se c'è un'azione in attesa di selezione bersaglio.
     /// </summary>
     private void AggiornaPulsanti()
     {
-        if (_btnPesca != null)
-            _btnPesca.interactable = _gioco.PuòPescare();
+        bool targetingInCorso = _gioco != null && _gioco.AzioneInAttesa != TipoAzioneInAttesa.Nessuna;
 
-        if (_btnFerma != null)
-            _btnFerma.interactable = _gioco.PuòFermarsi();
+        if (_btnPesca != null)
+            _btnPesca.interactable = !targetingInCorso && _gioco.PuòPescare();
+
+        if (_btnPassa != null)
+            _btnPassa.interactable = !targetingInCorso && _gioco.PuòFermarsi();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  ESC — Esce dall'applicazione
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Chiude l'applicazione. In Editor mostra un log (Application.Quit
+    /// non funziona in Editor).
+    /// </summary>
+    private void OnEsci()
+    {
+        Debug.Log("[Avvio] Uscita richiesta dall'utente.");
+        Application.Quit();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  SELEZIONE BERSAGLIO — UI per Congela e Pesca 3
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Mostra i bottoni per selezionare il bersaglio dell'azione in attesa.
+    /// Crea un pannello temporaneo con un bottone per ogni bersaglio disponibile.
+    /// </summary>
+    private void MostraBersagli()
+    {
+        if (_gioco == null || _pannelloGioco == null) return;
+
+        int[] bersagli = _gioco.BersagliDisponibili;
+        if (bersagli == null || bersagli.Length == 0) return;
+
+        // Se il pannello esiste già, non ricreare
+        if (_pannelloBersaglio != null) return;
+
+        string azioneNome = _gioco.AzioneInAttesa == TipoAzioneInAttesa.ScegliBersaglioCongela
+            ? "CONGELA" : "PESCA 3";
+
+        // Crea pannello temporaneo per i bottoni bersaglio
+        _pannelloBersaglio = new GameObject("PanelBersaglio");
+        _pannelloBersaglio.transform.SetParent(_pannelloGioco.transform, false);
+        var rt = _pannelloBersaglio.AddComponent<RectTransform>();
+        rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
+
+        // Posiziona sopra i bottoni PESCA/PASSA
+        float yBase = _isPortrait ? -350f : -280f;
+        rt.anchoredPosition = new Vector2(0f, yBase);
+
+        // Crea un bottone per ogni bersaglio disponibile
+        _bersaglioButtons = new List<Button>();
+        float startX = -(bersagli.Length - 1) * 45f;
+
+        for (int i = 0; i < bersagli.Length; i++)
+        {
+            int targetIdx = bersagli[i];
+            int giocatoreNum = targetIdx + 1;
+
+            var btn = CreaBottone(
+                $"BtnBersaglio{giocatoreNum}",
+                _pannelloBersaglio.transform,
+                $"G{giocatoreNum}",
+                startX + i * 90f, 0f, 75f, 55f,
+                _gioco.AzioneInAttesa == TipoAzioneInAttesa.ScegliBersaglioCongela
+                    ? new Color(0.5f, 0.3f, 0.7f)  // Viola per Congela
+                    : new Color(0.7f, 0.5f, 0.2f)   // Arancione per Pesca 3
+            );
+
+            btn.onClick.AddListener(delegate
+            {
+                if (_gioco != null)
+                {
+                    string azioneLog = _gioco.AzioneInAttesa == TipoAzioneInAttesa.ScegliBersaglioCongela
+                        ? "congela" : "Pesca 3 su";
+                    int mittente = _gioco.Round.GiocatoreCorrente + 1;
+                    _gioco.SelezionaBersaglio(targetIdx);
+                    _logEventi.Add($"Giocatore {mittente} {azioneLog} Giocatore {giocatoreNum}!");
+                    AggiornaPulsanti();
+                }
+            });
+
+            _bersaglioButtons.Add(btn);
+        }
+    }
+
+    /// <summary>
+    /// Pulisce la UI di selezione bersaglio (distrugge pannello e bottoni).
+    /// </summary>
+    private void PulisciBersagli()
+    {
+        if (_pannelloBersaglio != null)
+        {
+            Destroy(_pannelloBersaglio);
+            _pannelloBersaglio = null;
+        }
+        if (_bersaglioButtons != null)
+        {
+            _bersaglioButtons.Clear();
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -450,11 +707,11 @@ public class Avvio : MonoBehaviour
         for (int i = 0; i < _gioco.Partita.PunteggiTotali.Length; i++)
             pts += $"Giocatore {i + 1}: {_gioco.Partita.PunteggiTotali[i]} pt\n";
 
-        CreaTesto("Punteggi", CT, pts, 20, 0, -80, 400, 120);
+        CreaTesto("Punteggi", CT, pts, 22, 0, -80, 500, 140);
 
         // Bottone per tornare al menu
         var btnMenu = CreaBottone("BtnMenu", CT, "MENU PRINCIPALE",
-            0, -200, 280, 55, new Color(0.6f, 0.2f, 0.2f));  // Rosso scuro
+            0, -210, 320, 65, new Color(0.6f, 0.2f, 0.2f));  // Rosso scuro
         btnMenu.onClick.AddListener(CreaMenu);
 
         _schermoCorrente = Schermo.GameOver;
@@ -474,7 +731,8 @@ public class Avvio : MonoBehaviour
     private GameObject CreaPannello(string nome, bool attivo)
     {
         var obj = new GameObject(nome);
-        obj.transform.SetParent(_canvas.transform, false);
+        // I pannelli sono figli del SafeArea container (non del Canvas direttamente)
+        obj.transform.SetParent(_safeAreaContainer.transform, false);
         obj.SetActive(attivo);
 
         var rt = obj.AddComponent<RectTransform>();
@@ -576,7 +834,7 @@ public class Avvio : MonoBehaviour
 
         var txt = to.AddComponent<Text>();
         txt.text = testo;
-        txt.fontSize = 20;
+        txt.fontSize = 36;
         txt.alignment = TextAnchor.MiddleCenter;
         txt.color = Color.white;
         txt.fontStyle = FontStyle.Bold;

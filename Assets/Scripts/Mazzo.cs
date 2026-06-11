@@ -7,14 +7,11 @@ using System;
 /// Composizione:
 /// - 79 carte Numero (0×1, 1×1, 2×2, 3×3, 4×4, 5×5, 6×6, 7×7, 8×8, 9×9, 10×10, 11×11, 12×12)
 /// - 6 carte Modificatore (5 × Aggiungi: +2/+4/+6/+8/+10, 1 × Moltiplica: x2)
-/// - 3 carte Azione (Congela, PescaTreCarte, SecondaChance)
-/// Totale: 79 + 6 + 3 = 88... 
+/// - 9 carte Azione (3 × Congela, 3 × PescaTreCarte, 3 × SecondaChance)
+/// Totale: 79 + 6 + 9 = 94 carte
 /// 
-/// In realtà la distribuzione corretta è:
-/// - 1 carta "0", 1 carta "1", 2 carte "2", 3 carte "3", ..., 12 carte "12" = 1+1+2+3+4+5+6+7+8+9+10+11+12 = 79
-/// - 5 modificatori +X + 1 x2 = 6
-/// - 3 azioni
-/// Totale = 79 + 6 + 3 = 88 carte
+/// Distribuzione carte Numero: la frequenza di ogni carta eguaglia il suo valore.
+///   Esempio: "12" appare 12 volte, "11" appare 11 volte, ... "0" e "1" appaiono 1 volta ciascuno.
 /// 
 /// Funzionalità:
 /// - Costruzione automatica delle carte
@@ -86,7 +83,7 @@ public class Mazzo
     // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Costruisce tutte le 88 carte del mazzo Flip 7.
+    /// Costruisce tutte le 94 carte del mazzo Flip 7.
     /// 
     /// Carte Numero (79 totali):
     /// - 1 carta "0", 1 carta "1", poi per i valori 2-12: N carte del valore N
@@ -95,23 +92,28 @@ public class Mazzo
     /// - +2, +4, +6, +8, +10 (Aggiungi)
     /// - x2 (Moltiplica)
     /// 
-    /// Carte Azione (3 totali):
-    /// - Congela, PescaTreCarte, SecondaChance
+    /// Carte Azione (9 totali — 3 di ciascun tipo):
+    /// - 3 × Congela
+    /// - 3 × PescaTreCarte (Flip Three)
+    /// - 3 × SecondaChance
+    /// 
+    /// Totale: 79 + 6 + 9 = 94 carte
     /// </summary>
     private void CostruisciCarte()
     {
         // ── Carte Numero (0-12) ──
-        // Distribuzione: 1 carta per "0", 1 per "1", 2 per "2", ..., 12 per "12"
+        // Distribuzione: la frequenza di ogni carta eguaglia il suo valore.
+        // 1 carta per "0", 1 per "1", 2 per "2", 3 per "3", ..., 12 per "12"
         for (int i = 0; i <= 12; i++)
         {
-            int count = i == 0 ? 1 : i;  // "0" ha 1 carta, "1" ha 1 carta, "2" ha 2, ...
+            int count = i == 0 ? 1 : i;
             for (int j = 0; j < count; j++)
             {
                 _mazzo.Push(new Carta(TipoCarta.Numero, (ValoreNumero)i));
             }
         }
 
-        // ── Carte Modificatore ──
+        // ── Carte Modificatore (6 totali) ──
         int[] valoriAggiunta = { 2, 4, 6, 8, 10 };
         foreach (var val in valoriAggiunta)
         {
@@ -125,10 +127,13 @@ public class Mazzo
             TipoCarta.Modificatore,
             modificatore: TipoModificatore.Moltiplica));
 
-        // ── Carte Azione ──
-        _mazzo.Push(new Carta(TipoCarta.Azione, azione: TipoAzione.Congela));
-        _mazzo.Push(new Carta(TipoCarta.Azione, azione: TipoAzione.PescaTreCarte));
-        _mazzo.Push(new Carta(TipoCarta.Azione, azione: TipoAzione.SecondaChance));
+        // ── Carte Azione (9 totali — 3 per tipo) ──
+        for (int i = 0; i < 3; i++)
+        {
+            _mazzo.Push(new Carta(TipoCarta.Azione, azione: TipoAzione.Congela));
+            _mazzo.Push(new Carta(TipoCarta.Azione, azione: TipoAzione.PescaTreCarte));
+            _mazzo.Push(new Carta(TipoCarta.Azione, azione: TipoAzione.SecondaChance));
+        }
     }
 
     /// <summary>

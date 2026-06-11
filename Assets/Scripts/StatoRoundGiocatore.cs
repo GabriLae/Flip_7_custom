@@ -54,6 +54,9 @@ public class StatoRoundGiocatore
     /// <summary>Carte Numero pescate (valori unici — nessun duplicato).</summary>
     private List<ValoreNumero> _numeri;
 
+    /// <summary>Tutte le carte pescate in ordine (per visualizzazione UI).</summary>
+    private List<Carta> _cartePescate;
+
     /// <summary>Somma totale dei modificatori +X pescati.</summary>
     public int ModificatoreSomma { get; private set; }
 
@@ -76,6 +79,7 @@ public class StatoRoundGiocatore
         Stato = StatoGiocatore.Attivo;
         HaSecondaChance = true;
         _numeri = new List<ValoreNumero>();
+        _cartePescate = new List<Carta>();
         ModificatoreSomma = 0;
         HaMoltiplicatore = false;
         ContoAzioni = 0;
@@ -95,24 +99,54 @@ public class StatoRoundGiocatore
     //  METODI
     // ═══════════════════════════════════════════════════════════════════════
 
+
+    /// <summary>Restituisce la lista di tutte le carte pescate in ordine (per UI).</summary>
+    public IReadOnlyList<Carta> CartePescate => _cartePescate.AsReadOnly();
+
     /// <summary>
-    /// Aggiunge una carta allo stato del giocatore.
-    /// 
-    ///  Comportamento per tipo:
-    ///   - Numero: se è duplicato → Sballato; altrimenti lo aggiunge ai numeri
-    ///   - Modificatore (+X): somma il valore a ModificatoreSomma
-    ///   - Modificatore (x2): imposta HaMoltiplicatore = true
-    ///   - Azione Congela: imposta Stato = Congelato
-    ///   - Azioni PescaTreCarte/SecondaChance: solo incrementa ContoAzioni
-    ///     (la logica è gestita da StatoRound)
+    /// Restituisce una stringa compatta delle carte pescate per la UI.
+    /// Esempio: "7 3 9 | +4 x2 | Congela"
     /// </summary>
+    public string DescrizioneCarte()
+    {
+        var nums = new List<string>();
+        var mods = new List<string>();
+        var azioni = new List<string>();
+
+        foreach (var c in _cartePescate)
+        {
+            switch (c.Tipo)
+            {
+                case TipoCarta.Numero:
+                    nums.Add(((int)c.Numero.Value).ToString());
+                    break;
+                case TipoCarta.Modificatore:
+                    mods.Add(c.ToString());
+                    break;
+                case TipoCarta.Azione:
+                    azioni.Add(c.ToString());
+                    break;
+            }
+        }
+
+        var parti = new List<string>();
+        if (nums.Count > 0) parti.Add(string.Join(" ", nums));
+        if (mods.Count > 0) parti.Add(string.Join(" ", mods));
+        if (azioni.Count > 0) parti.Add(string.Join(" ", azioni));
+        return string.Join(" | ", parti);
+    }
+
     public void AggiungiCarta(Carta carta)
     {
+        // Registra la carta nella cronologia (per visualizzazione UI)
+        _cartePescate.Add(carta);
+
         switch (carta.Tipo)
         {
             case TipoCarta.Numero:
                 // Se il numero è già stato pescato → Sballato!
-                if (_numeri.Contains(carta.Numero.Value))
+                // Usa cast esplicito a int per evitare problemi di comparazione enum in alcuni runtime
+                if (ContieneNumero(carta.Numero.Value))
                 {
                     Stato = StatoGiocatore.Sballato;
                 }
@@ -135,12 +169,10 @@ public class StatoRoundGiocatore
 
             case TipoCarta.Azione:
                 ContoAzioni++;
-                if (carta.Azione == TipoAzione.Congela)
-                {
-                    Congela();
-                }
-                // PescaTreCarte e SecondaChance: solo conteggiate qui,
-                // la logica è gestita da StatoRound
+                // Congela e PescaTreCarte (Flip Three): 
+                // solo conteggiate qui come carte Azione per il bonus Flip7.
+                // La logica di targeting e applicazione è gestita da StatoRound.
+                // SecondaChance: già gestita in GestisciCartaPescata di StatoRound.
                 break;
         }
     }
@@ -180,4 +212,23 @@ public class StatoRoundGiocatore
     /// Restituisce la lista readonly dei numeri pescati (soli valori unici).
     /// </summary>
     public IReadOnlyList<ValoreNumero> Numeri => _numeri.AsReadOnly();
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  HELPER PRIVATI
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Verifica se un valore numerico è già stato pescato.
+    /// Usa cast esplicito a int per evitare problemi di comparazione
+    /// enum in alcuni runtime .NET (Unity IL2CPP / AOT).
+    /// </summary>
+    private bool ContieneNumero(ValoreNumero valore)
+    {
+        int target = (int)valore;
+        for (int i = 0; i < _numeri.Count; i++)
+        {
+            if ((int)_numeri[i] == target) return true;
+        }
+        return false;
+    }
 }

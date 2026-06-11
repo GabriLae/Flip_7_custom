@@ -16,6 +16,22 @@ public enum StatoPescaTreCarte
 }
 
 /// <summary>
+/// Tipo di azione in attesa di selezione del bersaglio.
+/// Quando un giocatore pesca Congela o Pesca 3, deve scegliere il bersaglio.
+/// </summary>
+public enum TipoAzioneInAttesa
+{
+    /// <summary>Nessuna azione in attesa — gioco normale.</summary>
+    Nessuna,
+
+    /// <summary>Il giocatore deve scegliere chi congelare.</summary>
+    ScegliBersaglioCongela,
+
+    /// <summary>Il giocatore deve scegliere su chi applicare Pesca 3 (PescaTreCarte).</summary>
+    ScegliBersaglioPescaTreCarte,
+}
+
+/// <summary>
 /// STATO DEL ROUND — Gestisce l'intero turno di gioco:
 /// - Turni dei giocatori (chi è di turno, passaggio al prossimo)
 /// - Pescate e azioni speciali (Congela, PescaTreCarte, SecondaChance)
@@ -78,6 +94,22 @@ public class StatoRound
     private List<Carta> _azioniDifferite;
 
     // ═══════════════════════════════════════════════════════════════════════
+    //  STATO SELEZIONE BERSAGLIO
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Tipo di azione in attesa di selezione bersaglio.
+    /// Se diverso da Nessuna, il gioco è in pausa in attesa di una scelta.
+    /// </summary>
+    public TipoAzioneInAttesa AzioneInAttesa { get; private set; }
+
+    /// <summary>
+    /// Indici dei giocatori validi come bersaglio per l'azione in attesa.
+    /// Null se nessuna azione in attesa.
+    /// </summary>
+    public int[] BersagliDisponibili { get; private set; }
+
+    // ═══════════════════════════════════════════════════════════════════════
     //  COSTRUTTORE
     // ═══════════════════════════════════════════════════════════════════════
 
@@ -93,6 +125,8 @@ public class StatoRound
         NumeroGiocatori = numeroGiocatori;
         GiocatoreCorrente = 0;
         Flip7Attivato = false;
+        AzioneInAttesa = TipoAzioneInAttesa.Nessuna;
+        BersagliDisponibili = null;
 
         _giocatori = new StatoRoundGiocatore[numeroGiocatori];
         for (int i = 0; i < numeroGiocatori; i++)
@@ -122,12 +156,18 @@ public class StatoRound
 
     /// <summary>
     /// Il giocatore corrente può pescare?
-    /// Sì, se è Attivo oppure se è in modalità PescaTreCarte.
+    /// - In modalità PescaTreCarte: sì, MA solo se il giocatore di turno è ancora Attivo
+    ///   (se è Sballato, le pescate forzate vengono saltate automaticamente in Pesca()).
+    /// - In gioco normale: solo se Attivo.
     /// </summary>
     public bool PuòPescare()
     {
-        return _giocatori[GiocatoreCorrente].PuòPescare
-            || _statoPescaTreCarte == StatoPescaTreCarte.InCorso;
+        if (_statoPescaTreCarte == StatoPescaTreCarte.InCorso)
+        {
+            // Durante PescaTreCarte, controlla che il giocatore in modalità sia ancora Attivo
+            return _giocatori[_giocatorePescaTreCarte].PuòPescare;
+        }
+        return _giocatori[GiocatoreCorrente].PuòPescare;
     }
 
     /// <summary>
@@ -135,10 +175,12 @@ public class StatoRound
     /// Sì, solo se:
     /// - È Attivo
     /// - NON è in modalità PescaTreCarte
+    /// - NON c'è un'azione in attesa di selezione bersaglio
     /// - Ha almeno una carta pescata, un modificatore, o un moltiplicatore
     /// </summary>
     public bool PuòFermarsi()
     {
+        if (AzioneInAttesa != TipoAzioneInAttesa.Nessuna) return false;
         var g = _giocatori[GiocatoreCorrente];
         return g.PuòPescare
             && _statoPescaTreCarte == StatoPescaTreCarte.Nessuno
@@ -159,6 +201,8 @@ public class StatoRound
     ///    e risolte solo dopo le 3 pescate.
     /// 
     ///  Se non è in PescaTreCarte, dopo la pescata passa al prossimo giocatore attivo.
+    ///  Eccezione: se la carta pescata richiede selezione bersaglio (Congela, Pesca 3),
+    ///    il turno NON viene passato — l'UI deve mostrare la scelta bersaglio.
     /// </summary>
     public void Pesca()
     {
@@ -171,14 +215,24 @@ public class StatoRound
         // Se la pescata ha fatto finire il round (Flip7), fermati
         if (RoundFinito) return;
 
+        // Se la carta richiede selezione bersaglio, non passare il turno
+        // L'UI mostrerà i bersagli e chiamerà SelezionaBersaglio()
+        if (AzioneInAttesa != TipoAzioneInAttesa.Nessuna) return;
+
         if (_statoPescaTreCarte == StatoPescaTreCarte.InCorso)
         {
             // Il giocatore è in modalità PescaTreCarte: continua a pescare
             _carteContatorePescaTreCarte++;
 
+            // Se il giocatore è Sballato dopo questa pescata, salta le rimanenti pescate forzate
+            if (_giocatori[_giocatorePescaTreCarte].ÈSballato)
+            {
+                _carteContatorePescaTreCarte = 3;   // Completa forzatamente PescaTreCarte
+            }
+
             if (_carteContatorePescaTreCarte >= 3)
             {
-                // Ha finito le 3 pescate forzate
+                // Ha finito le 3 pescate forzate (o è sballato e ha saltato)
                 _statoPescaTreCarte = StatoPescaTreCarte.Nessuno;
                 _carteContatorePescaTreCarte = 0;
 
@@ -214,6 +268,55 @@ public class StatoRound
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    //  SELEZIONE BERSAGLIO
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Seleziona il bersaglio per l'azione in attesa (Congela o Pesca 3).
+    /// 
+    ///  Per Congela: il bersaglio viene congelato, poi si passa il turno.
+    ///  Per Pesca 3: il bersaglio entra in modalità PescaTreCarte.
+    ///    - Se il bersaglio è un altro giocatore, il turno passa a lui.
+    ///    - Se il bersaglio è sé stesso, resta lo stesso giocatore.
+    /// 
+    /// </summary>
+    /// <param name="indiceBersaglio">Indice del giocatore bersaglio (0-based).</param>
+    public void SelezionaBersaglio(int indiceBersaglio)
+    {
+        if (AzioneInAttesa == TipoAzioneInAttesa.Nessuna) return;
+        if (BersagliDisponibili == null
+            || !System.Array.Exists(BersagliDisponibili, i => i == indiceBersaglio))
+            return;
+
+        switch (AzioneInAttesa)
+        {
+            case TipoAzioneInAttesa.ScegliBersaglioCongela:
+                _giocatori[indiceBersaglio].Congela();
+                AzioneInAttesa = TipoAzioneInAttesa.Nessuna;
+                BersagliDisponibili = null;
+                if (!RoundFinito)
+                    PassaAlProssimoGiocatore();
+                break;
+
+            case TipoAzioneInAttesa.ScegliBersaglioPescaTreCarte:
+                AzioneInAttesa = TipoAzioneInAttesa.Nessuna;
+                BersagliDisponibili = null;
+
+                if (indiceBersaglio != GiocatoreCorrente)
+                {
+                    // Pesca 3 su un altro giocatore: passa il turno al bersaglio
+                    GiocatoreCorrente = indiceBersaglio;
+                }
+                // Attiva PescaTreCarte sul bersaglio
+                _statoPescaTreCarte = StatoPescaTreCarte.InCorso;
+                _giocatorePescaTreCarte = indiceBersaglio;
+                _carteContatorePescaTreCarte = 0;
+                _azioniDifferite.Clear();
+                break;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     //  FINE ROUND
     // ═══════════════════════════════════════════════════════════════════════
 
@@ -236,8 +339,9 @@ public class StatoRound
     /// - Aggiunge la carta allo stato del giocatore
     /// - Se sballato e ha SecondaChance, la usa
     /// - Controlla se ha attivato Flip7
-    /// - Se è PescaTreCarte, attiva la modalità
-    /// - Se è Congela durante PescaTreCarte, la differisce
+    /// - Se è Congela: imposta selezione bersaglio (non durante PescaTreCarte)
+    /// - Se è PescaTreCarte (Pesca 3): imposta selezione bersaglio
+    /// - Se è Congela DURANTE PescaTreCarte: la differisce (risolta dopo le 3 pescate)
     /// </summary>
     private void GestisciCartaPescata(int indice, Carta carta)
     {
@@ -255,21 +359,45 @@ public class StatoRound
         // Controlla se ha raggiunto 7 numeri unici (Flip7!)
         ControllaFlip7(indice);
 
-        // Se è una carta PescaTreCarte, attiva la modalità speciale
-        if (carta.Tipo == TipoCarta.Azione && carta.Azione == TipoAzione.PescaTreCarte)
-        {
-            _statoPescaTreCarte = StatoPescaTreCarte.InCorso;
-            _giocatorePescaTreCarte = indice;
-            _carteContatorePescaTreCarte = 0;
-        }
+        // ── Gestione carte Azione con selezione bersaglio ──
+        if (carta.Tipo != TipoCarta.Azione) return;
 
-        // Se è una carta Congela durante PescaTreCarte, la mette in coda
-        if (carta.Tipo == TipoCarta.Azione
-            && carta.Azione == TipoAzione.Congela
-            && _statoPescaTreCarte == StatoPescaTreCarte.InCorso)
+        if (carta.Azione == TipoAzione.PescaTreCarte)
         {
-            _azioniDifferite.Add(carta);
+            // Flip Three: il giocatore sceglie il bersaglio (sé stesso o un altro giocatore attivo)
+            var bersagli = _giocatori
+                .Select((g, i) => new { g, i })
+                .Where(x => x.g.Stato == StatoGiocatore.Attivo)
+                .Select(x => x.i)
+                .ToArray();
+            BersagliDisponibili = bersagli;
+            AzioneInAttesa = TipoAzioneInAttesa.ScegliBersaglioPescaTreCarte;
+            _azioniDifferite.Clear();
         }
+        else if (carta.Azione == TipoAzione.Congela)
+        {
+            if (_statoPescaTreCarte == StatoPescaTreCarte.InCorso)
+            {
+                // Durante PescaTreCarte: la Congela viene differita
+                _azioniDifferite.Add(carta);
+            }
+            else
+            {
+                // Congela normale: il giocatore sceglie un altro giocatore attivo da congelare
+                var bersagli = _giocatori
+                    .Select((g, i) => new { g, i })
+                    .Where(x => x.g.Stato == StatoGiocatore.Attivo && x.i != indice)
+                    .Select(x => x.i)
+                    .ToArray();
+                if (bersagli.Length > 0)
+                {
+                    BersagliDisponibili = bersagli;
+                    AzioneInAttesa = TipoAzioneInAttesa.ScegliBersaglioCongela;
+                }
+                // Se nessun bersaglio valido, la Congela viene sprecata (nessun effetto)
+            }
+        }
+        // SecondaChance: già gestita sopra (UsaSecondaChance)
     }
 
     /// <summary>
@@ -278,7 +406,8 @@ public class StatoRound
     /// </summary>
     private void ControllaFlip7(int indice)
     {
-        if (_giocatori[indice].Numeri.Count >= 7)
+        var giocatore = _giocatori[indice];
+        if (giocatore.Numeri.Count >= 7)
         {
             Flip7Attivato = true;
         }

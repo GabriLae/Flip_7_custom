@@ -38,6 +38,9 @@ public class StatoPubblico
     /// <summary>Numero di carte Numero uniche pescate da ogni giocatore.</summary>
     public int[] ConteggioNumeri { get; set; }
 
+    /// <summary>Descrizione testuale delle carte pescate da ogni giocatore (per UI).</summary>
+    public string[] CarteDescrizioni { get; set; }
+
     /// <summary>Punteggio potenziale attuale di ogni giocatore (prima del calcolo finale).</summary>
     public int[] PunteggiPotenziali { get; set; }
 }
@@ -110,6 +113,27 @@ public class MotoreDiGioco
     /// <summary>True se il round corrente è terminato.</summary>
     public bool RoundFinito => Round.RoundFinito;
 
+    /// <summary>
+    /// Tipo di azione in attesa di selezione bersaglio.
+    /// Se diverso da Nessuna, l'UI deve mostrare i bersagli disponibili.
+    /// </summary>
+    public TipoAzioneInAttesa AzioneInAttesa => Round?.AzioneInAttesa ?? TipoAzioneInAttesa.Nessuna;
+
+    /// <summary>
+    /// Indici dei giocatori validi come bersaglio per l'azione in attesa.
+    /// Null se nessuna azione in attesa.
+    /// </summary>
+    public int[] BersagliDisponibili => Round?.BersagliDisponibili;
+
+    /// <summary>
+    /// Seleziona il bersaglio per l'azione in attesa (Congela o Pesca 3).
+    /// </summary>
+    public void SelezionaBersaglio(int indiceBersaglio)
+    {
+        if (Round != null)
+            Round.SelezionaBersaglio(indiceBersaglio);
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     //  GESTIONE FINE ROUND
     // ═══════════════════════════════════════════════════════════════════════
@@ -161,6 +185,7 @@ public class MotoreDiGioco
             PunteggiTotali = (int[])Partita.PunteggiTotali.Clone(),
             StatiGiocatori = new string[n],
             ConteggioNumeri = new int[n],
+            CarteDescrizioni = new string[n],
             PunteggiPotenziali = new int[n],
         };
 
@@ -170,6 +195,7 @@ public class MotoreDiGioco
             var g = Round.OttieniGiocatore(i);
             stato.StatiGiocatori[i] = g.Stato.ToString();     // "Attivo", "Sballato", ecc.
             stato.ConteggioNumeri[i] = g.Numeri.Count;        // Quanti numeri unici ha
+            stato.CarteDescrizioni[i] = g.DescrizioneCarte();  // Carte pescate (testo)
             stato.PunteggiPotenziali[i] = CalcolatorePunteggio.CalcolaPunteggio(g);
         }
 
